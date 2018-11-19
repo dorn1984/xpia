@@ -1,0 +1,16 @@
+#!/bin/bash 
+#PBS -N profiles_100
+#PBS -A P48500047 
+#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=12
+#PBS -m abe
+#PBS -M Paula.Doubrawa@nrel.gov
+#PBS -q regular
+#PBS -j oe
+
+source ~/.bash_profile
+pythonEnv
+
+cd $PBS_O_WORKDIR
+
+python ~/code/vertical_profiles_and_slices_time_loop_d03.py
