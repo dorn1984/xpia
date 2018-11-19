@@ -159,6 +159,7 @@ for day in [day]:
                     else:
                         data[var][sn_0:sn_1, we_0:we_1] = data_tmp.copy()            
 
+                full_terrain = data_static["ter"].copy()
                 for var in variables_static:
                     
                     try:
@@ -174,7 +175,7 @@ for day in [day]:
 
                     data_static[var][sn_0:sn_1, we_0:we_1] = data_tmp.copy()            
                                  
-            data["z"] = data["z"] - data_static["ter"]
+            data["z"] = data["z"] - full_terrain
 
             #
             # unstagger u and v
