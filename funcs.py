@@ -170,8 +170,12 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
     f = RectBivariateSpline(f1d,f1d,psd_2d) 
         
     if radii_wavelength is None:
-        radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,10))
-        radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,250))
+        if min_radius<700:
+            radii_wavelength = np.arange(min_radius,700,2)         
+            radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,10))            
+        else:
+            radii_wavelength = np.arange(min_radius,3000,10)         
+        radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,250))        
 
     radii_wavenumber = 1/radii_wavelength    
     nr               = len(radii_wavelength)
