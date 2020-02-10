@@ -1,4 +1,5 @@
 import numpy as np
+import os, xarray
 import numpy.matlib
 from scipy import fftpack
 from scipy.interpolate import RectBivariateSpline
@@ -16,10 +17,10 @@ def get_psd_2d(array, spacing):
 
     # apply fft
     fftarray  = fftpack.fft2(array_windowed)
-
+    
     # get psd
     fftarray_shifted = fftpack.fftshift(fftarray)
-    psd_2d   = np.abs(fftarray_shifted[1:,1:])**2
+    psd_2d   = (fftarray_shifted[1:,1:] * np.conj(fftarray_shifted[1:,1:])).real
     
     # get frequencies
     fr = fftpack.fftfreq(npts, d=spacing)
@@ -32,6 +33,128 @@ def get_psd_2d(array, spacing):
     f2d = fr_x
     
     return f1d, f2d, psd_2d
+
+
+def get_csd_2d(array1, array2, spacing):
+
+    (npts,npts) = array1.shape
+
+    # apply window (to minimize noise since the arrays are not periodic in space)
+    hamm_2d = return_hamming(Nx=npts,Ny=npts)    
+    array1_windowed = array1 * hamm_2d
+    array2_windowed = array2 * hamm_2d    
+
+    # apply fft
+    fftarray1  = fftpack.fft2(array1_windowed)
+    fftarray2  = fftpack.fft2(array2_windowed)    
+    
+    # get csd
+    fftarray1_shifted = fftpack.fftshift(fftarray1)
+    fftarray2_shifted = fftpack.fftshift(fftarray2)    
+    csd_2d   = (np.conj(fftarray1_shifted[1:,1:])*fftarray2_shifted[1:,1:]).real
+    
+    # get frequencies
+    fr = fftpack.fftfreq(npts, d=spacing)
+    fr = fr[1:]
+    fr = np.sort(fr)
+    
+    [fr_x,fr_y] = np.meshgrid(fr,fr)
+    
+    f1d = fr
+    f2d = fr_x
+    
+    return f1d, f2d, csd_2d
+
+def get_prime_and_means(datapath, datetime, zi, varname='w', z_zi_target=0.5, sims=["LES","vles","mynn","ysu","sh"], verbose=False):
+    
+    datetime_str = "{0:%Y-%m-%d_%H:%M}".format(datetime)
+    
+    xy_primes    = {}
+    xy_means     = {}    
+    
+    for sim in sims:        
+
+        sim_prefix      = sim+"_25m" if sim=="LES" else sim
+        fpath           = os.path.join(datapath,"WRF_{0}_3D_{1}_plus_filtered.nc".format(sim_prefix,datetime_str))    
+        data            = xarray.open_dataset(fpath)
+        
+        if varname=='ws':
+            data["ws_filt"] = np.sqrt(data["u_filt"]**2+data["v_filt"]**2)
+            data["ws"]      = np.sqrt(data["u"]**2+data["v"]**2)    
+
+        z         = data['z'].copy()
+        zmean     = np.median(z.values,axis=(1,2))
+        z_zi      = zmean/zi    
+        k         = np.argmin(np.abs(z_zi-z_zi_target))    
+
+        variable  = data[varname+"_filt"].copy()
+        variable  = variable.values[k,...].copy()
+    
+        xy_mean   = np.mean(variable)
+        xy_prime  = variable - xy_mean
+        
+        xy_primes[sim] = xy_prime.copy()
+        xy_means[sim]  = xy_mean
+        
+        if verbose:
+            print("................")            
+            print("Simulation : {0}".format(sim))
+            print("File : {0}".format(os.path.split(fpath)[-1]))
+            print("Vertical level : {0}".format(k)) 
+            print("Getting {0}".format(varname+"_filt"))
+
+        # sim == "LES" also get the raw values, i.e. without the primes
+        if sim=="LES":
+            if verbose:            
+                print("Getting {0}".format(varname))        
+            variable              = data[varname].copy()
+            variable              = variable.values[k,...]           
+            xy_mean               = np.mean(variable)
+            xy_prime              = variable - xy_mean
+            xy_primes[sim+"_raw"] = xy_prime.copy()    
+            xy_means[sim+"_raw"]  = xy_mean
+            
+    return xy_primes, xy_means
+
+def coarsen(dictionary_of_arrays, target_delta=333.0, target_npts=90):
+    
+    dictionary_coarse = {}
+    
+    x1d_desired = np.arange(0,target_npts*target_delta,target_delta)
+    y1d_desired = x1d_desired.copy()    
+    
+    for sim in dictionary_of_arrays.keys():    
+        npts, npts = dictionary_of_arrays[sim].shape
+        if npts>500:
+            delta      = 25.0
+            x1d        = np.arange(0,npts*delta,delta)
+            y1d        = x1d.copy()                
+            func       = RectBivariateSpline(x1d, y1d, dictionary_of_arrays[sim])            
+            dictionary_coarse[sim] = func(x1d_desired, y1d_desired)        
+        else:
+            dictionary_coarse[sim] = dictionary_of_arrays[sim].copy()
+            
+    return dictionary_coarse
+
+def make_finer(dictionary_of_arrays, target_delta=25.0, target_npts=1200):
+    
+    dictionary_coarse = {}
+    
+    x1d_desired = np.arange(0,target_npts*target_delta,target_delta)
+    y1d_desired = x1d_desired.copy()    
+    
+    for sim in dictionary_of_arrays.keys():    
+        npts, npts = dictionary_of_arrays[sim].shape
+        if npts<500:
+            delta      = 333.0
+            x1d        = np.arange(0,npts*delta,delta)
+            y1d        = x1d.copy()                
+            func       = RectBivariateSpline(x1d, y1d, dictionary_of_arrays[sim])            
+            dictionary_coarse[sim] = func(x1d_desired, y1d_desired)        
+        else:
+            dictionary_coarse[sim] = dictionary_of_arrays[sim].copy()
+            
+    return dictionary_coarse
 
 def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_radius=50.0, max_radius=30000.0):
 
@@ -47,8 +170,7 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
     f = RectBivariateSpline(f1d,f1d,psd_2d) 
         
     if radii_wavelength is None:
-        radii_wavelength = np.arange(min_radius,300,1) 
-        radii_wavelength = np.append(radii_wavelength, np.arange(300,3000,20))
+        radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,10))
         radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,250))
 
     radii_wavenumber = 1/radii_wavelength    
@@ -72,6 +194,8 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
             xx  = rr*np.cos(theta)
             yy  = rr*np.sin(theta)         
             val = f(xx,yy)[0][0]
+            
+            val = np.nan if val<0 else val
 
             x_polar[ir,itheta]     = xx
             y_polar[ir,itheta]     = yy
