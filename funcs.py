@@ -156,7 +156,7 @@ def make_finer(dictionary_of_arrays, target_delta=25.0, target_npts=1200):
             
     return dictionary_coarse
 
-def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_radius=50.0, max_radius=30000.0):
+def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_radius=50.0, max_radius=30000.0, cap_at_zero=False):
 
     """
     Parameters
@@ -171,11 +171,11 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
         
     if radii_wavelength is None:
         if min_radius<700:
-            radii_wavelength = np.arange(min_radius,700,2)         
-            radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,10))            
+            radii_wavelength = np.arange(min_radius,700,1)         
+            radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,2))            
         else:
-            radii_wavelength = np.arange(min_radius,3000,10)         
-        radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,250))        
+            radii_wavelength = np.arange(min_radius,3000,2)         
+        radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,25))        
 
     radii_wavenumber = 1/radii_wavelength    
     nr               = len(radii_wavelength)
@@ -199,7 +199,8 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
             yy  = rr*np.sin(theta)         
             val = f(xx,yy)[0][0]
             
-            val = np.nan if val<0 else val
+            if cap_at_zero:
+                val = np.nan if val<0 else val
 
             x_polar[ir,itheta]     = xx
             y_polar[ir,itheta]     = yy
