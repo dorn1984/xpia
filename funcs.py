@@ -20,20 +20,17 @@ def get_psd_2d(array, spacing):
     
     # get psd
     fftarray_shifted = fftpack.fftshift(fftarray)
-    psd_2d   = (fftarray_shifted[1:,1:] * np.conj(fftarray_shifted[1:,1:])).real
+    psd_2d   = np.abs(fftarray_shifted)**2 
     
     # get frequencies
-    fr = fftpack.fftfreq(npts, d=spacing)
-    fr = fr[1:]
-    fr = np.sort(fr)
-    
-    [fr_x,fr_y] = np.meshgrid(fr,fr)
-    
-    f1d = fr
-    f2d = fr_x
-    
-    return f1d, f2d, psd_2d
-
+    frequency = fftpack.fftfreq(npts, d=spacing)
+    frequency = fftpack.fftshift(frequency)
+        
+    # scale the psd when needed
+    factor = (90/1200)**4 if npts==1200 else 1
+    psd_2d = psd_2d*factor
+        
+    return frequency, psd_2d
 
 def get_csd_2d(array1, array2, spacing):
 
@@ -47,23 +44,24 @@ def get_csd_2d(array1, array2, spacing):
     # apply fft
     fftarray1  = fftpack.fft2(array1_windowed)
     fftarray2  = fftpack.fft2(array2_windowed)    
-    
+
     # get csd
-    fftarray1_shifted = fftpack.fftshift(fftarray1)
-    fftarray2_shifted = fftpack.fftshift(fftarray2)    
-    csd_2d   = (np.conj(fftarray1_shifted[1:,1:])*fftarray2_shifted[1:,1:]).real
+    csd_2d   = fftarray1 * fftarray2
+    csd_2d   = np.abs(csd_2d)
+    
+    # scale the csd when needed
+    factor = (90/1200)**4 if npts==1200 else 1
+    print("scaling factor: {0}".format(factor))
+    csd_2d = csd_2d*factor    
+    
+    # shift
+    csd_2d = fftpack.fftshift(csd_2d)    
     
     # get frequencies
-    fr = fftpack.fftfreq(npts, d=spacing)
-    fr = fr[1:]
-    fr = np.sort(fr)
+    frequency = fftpack.fftfreq(npts, d=spacing)
+    frequency = fftpack.fftshift(frequency)    
     
-    [fr_x,fr_y] = np.meshgrid(fr,fr)
-    
-    f1d = fr
-    f2d = fr_x
-    
-    return f1d, f2d, csd_2d
+    return frequency, csd_2d
 
 def get_prime_and_means(datapath, datetime, zi, varname='w', z_zi_target=0.5, sims=["LES","vles","mynn","ysu","sh"], verbose=False):
     
@@ -81,6 +79,9 @@ def get_prime_and_means(datapath, datetime, zi, varname='w', z_zi_target=0.5, si
         if varname=='ws':
             data["ws_filt"] = np.sqrt(data["u_filt"]**2+data["v_filt"]**2)
             data["ws"]      = np.sqrt(data["u"]**2+data["v"]**2)    
+        if varname=='wd':
+            data["wd"]      = 180.0 + np.degrees(np.arctan2(all_data["v"],all_data["u"]))                      
+            data["wd_filt"] = 180.0 + np.degrees(np.arctan2(all_data["v_filt"],all_data["u_filt"]))            
 
         z         = data['z'].copy()
         zmean     = np.median(z.values,axis=(1,2))
@@ -114,7 +115,7 @@ def get_prime_and_means(datapath, datetime, zi, varname='w', z_zi_target=0.5, si
             xy_primes[sim+"_raw"] = xy_prime.copy()    
             xy_means[sim+"_raw"]  = xy_mean
             
-    return xy_primes, xy_means
+    return xy_primes, xy_means, k
 
 def coarsen(dictionary_of_arrays, target_delta=333.0, target_npts=90):
     
@@ -140,14 +141,14 @@ def make_finer(dictionary_of_arrays, target_delta=25.0, target_npts=1200):
     
     dictionary_coarse = {}
     
-    x1d_desired = np.arange(0,target_npts*target_delta,target_delta)
+    x1d_desired = np.arange(target_delta/2.0,target_npts*target_delta,target_delta)
     y1d_desired = x1d_desired.copy()    
     
     for sim in dictionary_of_arrays.keys():    
         npts, npts = dictionary_of_arrays[sim].shape
         if npts<500:
             delta      = 333.0
-            x1d        = np.arange(0,npts*delta,delta)
+            x1d        = np.arange(delta/2.0,npts*delta,delta)
             y1d        = x1d.copy()                
             func       = RectBivariateSpline(x1d, y1d, dictionary_of_arrays[sim])            
             dictionary_coarse[sim] = func(x1d_desired, y1d_desired)        
@@ -156,7 +157,7 @@ def make_finer(dictionary_of_arrays, target_delta=25.0, target_npts=1200):
             
     return dictionary_coarse
 
-def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_radius=50.0, max_radius=30000.0, cap_at_zero=False):
+def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavenumbers=None, cap_at_zero=True):
 
     """
     Parameters
@@ -167,48 +168,46 @@ def psd_cartesian_to_polar(f1d, psd_2d, thetas=None, radii_wavelength=None, min_
         one-dimensional array of desired azimuths [radians]
     """
     
-    f = RectBivariateSpline(f1d,f1d,psd_2d) 
-        
-    if radii_wavelength is None:
-        if min_radius<700:
-            radii_wavelength = np.arange(min_radius,700,1)         
-            radii_wavelength = np.append(radii_wavelength, np.arange(min_radius,3000,2))            
-        else:
-            radii_wavelength = np.arange(min_radius,3000,2)         
-        radii_wavelength = np.append(radii_wavelength, np.arange(3000,max_radius+0.1,25))        
+    frequency    = f1d
+    spectrum     = psd_2d
+    interpolator = RectBivariateSpline(frequency,frequency,spectrum) 
 
-    radii_wavenumber = 1/radii_wavelength    
-    nr               = len(radii_wavelength)
-    
+    # define azimuth angles
     if thetas is None:
         thetas           = np.radians(np.arange(135,315.1,1))
     else:
         if np.any(thetas>2.1*np.pi):
             thetas = np.radians(thetas)
-    ntheta           = len(thetas)
+    ntheta = len(thetas)
 
-    theta_polar      = np.zeros((nr,ntheta))
+    # define radii of wavenumbers
+    if radii_wavenumbers is None:
+        radii_wavenumbers = np.unique(np.sqrt(frequency**2 + frequency**2))
+    nr = len(radii_wavenumbers)
+
+    # allocate space to keep interpolated values
+    angles_polar     = np.zeros((nr,ntheta))
     x_polar          = np.zeros((nr,ntheta))
     y_polar          = np.zeros((nr,ntheta))
     psd_polar        = np.zeros((nr,ntheta))
     radii_polar      = np.zeros((nr,ntheta))
 
-    for ir,rr in enumerate(radii_wavenumber):
+    for ir,rr in enumerate(radii_wavenumbers):
         for itheta,theta in enumerate(thetas):
             xx  = rr*np.cos(theta)
             yy  = rr*np.sin(theta)         
-            val = f(xx,yy)[0][0]
-            
-            if cap_at_zero:
-                val = np.nan if val<0 else val
+            val = interpolator(xx,yy)[0][0]
 
-            x_polar[ir,itheta]     = xx
-            y_polar[ir,itheta]     = yy
-            psd_polar[ir,itheta]   = val
-            theta_polar[ir,itheta] = theta
-            radii_polar[ir,itheta] = rr
-            
-    return x_polar, y_polar, theta_polar, radii_polar, psd_polar
+            if cap_at_zero:
+                val = np.nan if val<0 else val            
+
+            x_polar[ir,itheta]      = xx
+            y_polar[ir,itheta]      = yy
+            psd_polar[ir,itheta]    = val
+            angles_polar[ir,itheta] = theta
+            radii_polar[ir,itheta]  = rr    
+
+    return x_polar, y_polar, angles_polar, radii_polar, psd_polar
 
 def plot_psd_polar(theta, radii, psd_2d_polar,log10=True,vmin=None,vmax=None):
     fig = plt.figure(figsize=(6,6))
